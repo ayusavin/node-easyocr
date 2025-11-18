@@ -19,7 +19,10 @@ export class EasyOCR {
   private pythonProcess: ChildProcess | null = null;
 
   constructor() {
-    this.pythonPath = 'python3';
+    const venvPath = path.join(__dirname, '..', 'venv');
+    this.pythonPath = process.platform === 'win32'
+      ? path.join(venvPath, 'Scripts', 'python.exe')
+      : path.join(venvPath, 'bin', 'python');
     this.scriptPath = path.join(__dirname, 'easyocr_script.py');
   }
 
