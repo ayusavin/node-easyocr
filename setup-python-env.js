@@ -1,5 +1,6 @@
 const { spawn, execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 function getPythonPath() {
   try {
@@ -23,6 +24,90 @@ function getPythonPath() {
   }
 }
 
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const process = spawn(command, args, { stdio: 'inherit', ...options });
+    process.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Command failed with exit code ${code}`));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+function runCommandWithOutput(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const process = spawn(command, args, { stdio: 'pipe', ...options });
+    let stdout = '';
+    let stderr = '';
+    
+    process.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    process.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    process.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+    
+    process.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
+
+async function downloadEasyOCRModels(venvPythonPath) {
+  try {
+    console.log('\nDownloading EasyOCR models...');
+    console.log('This may take a few minutes on first run...');
+    
+    // Create a Python script to download models
+    const downloadScript = `
+import easyocr
+import sys
+
+try:
+    print("Initializing EasyOCR Reader with English language...")
+    reader = easyocr.Reader(['en'], gpu=False)
+    print("Models downloaded successfully!")
+    print("EasyOCR is ready to use.")
+except Exception as e:
+    print(f"Error downloading models: {e}", file=sys.stderr)
+    sys.exit(1)
+`;
+
+    const scriptPath = path.join(__dirname, 'download_models_temp.py');
+    fs.writeFileSync(scriptPath, downloadScript);
+
+    try {
+      const result = await runCommandWithOutput(venvPythonPath, [scriptPath]);
+      
+      if (result.code !== 0) {
+        console.error('Error downloading models:', result.stderr);
+        throw new Error('Failed to download EasyOCR models');
+      }
+      
+      console.log(result.stdout);
+      console.log('EasyOCR models setup complete!');
+    } finally {
+      // Clean up temporary script
+      try {
+        fs.unlinkSync(scriptPath);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+  } catch (error) {
+    console.error('Error downloading EasyOCR models:', error.message);
+    console.warn('Models will be downloaded automatically on first use.');
+  }
+}
+
 try {
   const pythonPath = getPythonPath();
   const venvPath = path.join(__dirname, 'venv');
@@ -32,19 +117,6 @@ try {
     'torch',
     'torchvision'
   ];
-
-  function runCommand(command, args, options = {}) {
-    return new Promise((resolve, reject) => {
-      const process = spawn(command, args, { stdio: 'inherit', ...options });
-      process.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Command failed with exit code ${code}`));
-        } else {
-          resolve();
-        }
-      });
-    });
-  }
 
   async function setup() {
     try {
@@ -61,6 +133,7 @@ try {
         : path.join(venvPath, 'bin', 'python');
       
       // Ensure pip is up to date in the virtual environment
+      console.log('Upgrading pip...');
       await runCommand(venvPythonPath, ['-m', 'pip', 'install', '--upgrade', 'pip']);
       
       // Install requirements in the virtual environment
@@ -69,7 +142,12 @@ try {
         await runCommand(venvPythonPath, ['-m', 'pip', 'install', req]);
       }
       
-      console.log('Python environment setup complete!');
+      console.log('Python dependencies installation complete!');
+      
+      // Download EasyOCR models
+      await downloadEasyOCRModels(venvPythonPath);
+      
+      console.log('\nPython environment setup complete!');
       console.log(`To activate the virtual environment, run:`);
       if (process.platform === 'win32') {
         console.log(`${path.join(venvPath, 'Scripts', 'activate.bat')}`);
